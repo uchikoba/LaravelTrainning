@@ -1,0 +1,443 @@
+Cloud9上にLaravelの環境を構築
+
+■workspaceに初期配置されてるファイルは不要なので消すかどっか違う場所に移しておく。
+
+ $ mkdir ../trash
+ $ mv ./* ../trash
+
+
+■PHPを5.5.9から5.6へ
+
+ $ sudo add-apt-repository ppa:ondrej/php
+
+[ENTER]
+
+ $ sudo apt-get update
+ $ sudo apt-get install libapache2-mod-php5.6
+
+[Y]
+
+ $ sudo a2dismod php5
+ $ sudo a2enmod php5.6
+ $ sudo add-apt-repository ppa:ondrej/php5-compat
+
+[ENTER]
+
+ $ sudo apt-get update
+ $ sudo apt-get dist-upgrade
+
+[Y]
+[Y]
+
+
+■Laravelインストール
+
+ $ sudo composer global require 'laravel/installer'
+
+なんか怒られるけど気にせず放置
+laravelコマンドが打てるようにパスを通す
+
+ $ echo "export PATH=\$PATH:~/.composer/vendor/bin" >> ~/.profile
+ $ source ~/.profile
+ $ which laravel
+
+パスが表示されればOK
+
+
+■プロジェクト作成
+
+ $ laravel new sample
+
+なんか怒られるけどとりあえず出来てるっぽい
+
+
+■ドキュメントルートをapp/publicに
+
+ $ sudo nano /etc/apache2/sites-enabled/001-cloud9.conf
+
+DocumentRootのところを変えて、[F2]->[Y]->[ENTER]
+
+ /home/ubuntu/workspace/sample/public
+
+
+■データベースのセットアップ
+
+ $ mysql-ctl install
+ $ mysql-ctl start
+ $ mysql-ctl cli
+ mysql> show databases;
+
+c9という空のデータベースを使うも良し、好きな名前で作っても良し。
+※Cloud9のデータベースはパスワードが設定されていないので、気になる人はGRANT辺りで適切な設定を。
+
+データベースへの接続設定
+
+ $ cp ~/workspace/sample/.env.example ~/workspace/sample/.env
+ $ vi ~/workspace/sample/.env
+
+ DB_CONNECTION=mysql
+ DB_HOST=127.0.0.1
+ DB_PORT=3306
+ DB_DATABASE=your_created_database_name
+ DB_USERNAME=your_cloud9_username
+ DB_PASSWORD=
+
+DB_PASSWORDは空でOK。設定した場合はそのパスワードを。
+
+
+■アプリケーションキーを登録
+
+ $ php artisan key:generate
+
+
+■Node.jsのアップデート
+
+プロジェクトのディレクトリに移動
+
+ $ cd sample
+
+ $ sudo npm install -g npm
+ $ npm install
+
+だいぶ待たされる
+
+ $ nvm install 7.5.0
+ $ npm rebuild node-sass
+
+
+Node.jsの関連ファイルを再構築
+
+ $ npm run dev
+
+
+★★★いったんここまでやればLaravelが動いてる。あとはアプリを実装するだけ。
+
+というわけで超お手軽なタスク管理アプリでも。
+
+
+■マイグレーションファイル作成
+
+ $ php artisan make:migration create_tasks_table --create=tasks
+
+もしファイル作成時に怒られたら（Bootstrapのautoload.phpがアババ～ってなった）
+
+ $ composer update
+
+を試す。それで駄目ならぐーぐる先生。
+
+./databases/migrations/yyyy_mm_dd_hhiiss_create_tasks_table.phpを編集
+
+ public function up()
+ {
+     Schema::create('tasks', function (Blueprint $table) {
+         $table->increments('id');
+         $table->string('name')->nullable();
+         $table->boolean('done')->default(false);
+         $table->timestamps();
+         $table->softDeletes();
+     });
+ }
+
+マイグレーション
+
+ $ php artisan migrate
+
+なにやら怒られるけどLaravelプロジェクトを作ったときのAuth用テーブルのマイグレーションファイルのことなのでスルー
+
+
+■Model作成
+
+ $ php artisan make:model Task
+
+app/Task.phpを編集
+
+ namespace App;
+ 
+ use Illuminate\Database\Eloquent\Model;
+ use Illuminate\Database\Eloquent\SoftDeletes;
+ 
+ class Task extends Model
+ {
+     use SoftDeletes;
+ 
+     protected $fillable = [
+         'name',
+         'done',
+     ];
+ }
+
+
+■Controller作成
+
+ $ php artisan make:controller TasksController
+
+app/Http/Controllers/TasksController.phpが作られます。中身は後から
+
+
+■ルーティング（routes/web.phpを編集）
+
+ Route::resource('tasks', 'TasksController');
+
+これでGET/POST/PUTなどのリクエストメソッドを使った7つのCRUD系アクションが搭載される
+
+
+■View作成
+
+アプリ共通の「ガワ」
+resources/views/layouts/app.blade.php
+
+ <!DOCTYPE html>
+ <html lang="ja">
+     <head>
+         <meta http-charset="utf-8">
+         <title>@yield('title')</title>
+         <link rel="stylesheet" href="{{ asset('css/app.css') }}">
+     </head>
+     <body>
+         <div class="container">
+             <nav class="navbar navbar-default">
+                 <a class="navbar-brand" href="{{ url('/tasks') }}">タスク一覧</a>
+                 <a class="navbar-brand" href="{{ url('/tasks/create') }}">新規作成</a>
+             </nav>
+         </div>
+ 
+         @yield('content')
+ 
+         <script src="{{ asset('js/app.js') }}"></script>
+     </body>
+ </html>
+
+
+■Formヘルパーのインストール
+
+ $ composer require laravelcollective/html
+
+config/app.phpのprovidersとaliasesに設定を追加
+
+ 'providers' => [
+ 
+     Collective\Html\HtmlServiceProvider::class,
+ 
+ 'aliases' => [
+     'Form' => Collective\Html\FormFacade::class,
+     'Html' => Collective\Html\HtmlFacade::class,
+
+
+■新規登録画面の作成
+
+コントローラ（app/Http/Controllers/TasksController.php）の実装
+
+ <?php
+ 
+ namespace App\Http\Controllers;
+ 
+ use Illuminate\Http\Request;
+ 
+ use App\Task;
+ use App\Http\Request;
+ 
+ class TasksController extends Controller
+ {
+     public function create()
+     {
+         return view('tasks/create')->with('task', new Task());
+     }
+ 
+     public function store(Request $request)
+     {
+         $task = new Task();
+         $task->fill($request->all());
+         $task->save();
+         return redirect()->route('tasks.index');
+     }
+ }
+
+とりあえずバリデーションは置いといて。
+
+画面はこちら（resources/views/tasks/create.blade.php）
+
+ @extends('layouts.app')
+ 
+ @section('title', '新規登録')
+ 
+ @section('content')
+ 
+         <div class="panel panel-default">
+             <div class="panel-heading">新規登録</div>
+             <div class="panel-body">
+                 {!! Form::model($task, ['route' => 'tasks.store', 'method' => 'post', 'class' => 'form-horizontal']) !!}
+                     <div class="form-group">
+                         {!! Form::label('name', 'タスク名', ['class' => 'col-sm-3 control-label']) !!}
+                         <div class="col-sm-6">
+                             {!! Form::text('name', $task->name, ['id' => 'task-name', 'class' => 'form-control']) !!}
+                         </div>
+                     </div>
+                     <div class="form-group">
+                         <div class="col-sm-offset-3 col-sm-6">
+                             {!! Form::submit('タスク追加', ['class' => 'btn btn-default']) !!}
+                         </div>
+                     </div>
+                 {!! Form::close() !!}
+             </div>
+             <div class="panel-footer">
+                 {{ link_to_route('tasks.index', '戻る') }}
+             </div>
+         </div>
+ 
+ @endsection
+
+
+■タスク一覧
+
+コントローラにindexメソッドを実装する
+
+ public function index()
+ {
+     $tasks = Task::orderBy('updated_at', 'desc')->get();
+     return view('tasks/index')->with('tasks', $tasks);
+ }
+
+ビュー（views/tasks/index.blade.php）はこんな感じ
+
+ @extends('layouts.app')
+ 
+ @section('title', 'タスク一覧')
+ 
+ @section('content')
+ 
+         <div class="panel panel-default">
+             <div class="panel-heading">タスク一覧</div>
+             <div class="panel-body">
+                 <table class="table table-striped task-table">
+                     <thead>
+                         <th>タスク名</th>
+                         <th>完了</th>
+                         <th>編集</th>
+                         <th>削除</th>
+                     </thead>
+                     <tbody>
+                         @foreach ($tasks as $task)
+                             <tr>
+                                 <td class="table-text">
+                                     {{ link_to_route('tasks.show', $task->name, $task->id) }}
+                                 </td>
+                                 <td class="table-text">
+                                     {{ $task->done ? '完了' : '未' }}
+                                 </td>
+                                 <td class="table-text">
+                                     {{ link_to_route('tasks.edit', '編集', $task->id, ['class' => 'btn btn-sm btn-default']) }}
+                                 </td>
+                                 <td class="table-text">
+                                     {{ Form::open(['route' => ['tasks.destroy', $task->id], 'method' => 'delete']) }}
+                                         {{ Form::hidden('id', $task->id) }}
+                                         {{ Form::submit('削除', ['class' => 'btn btn-sm btn-default']) }}
+                                     {{ Form::close() }}
+                                 </td>
+                             </tr>
+                         @endforeach
+                     </tbody>
+                 </table>
+             </div>
+         </div>
+ 
+ @endsection
+
+
+■詳細画面
+
+コントローラ
+
+ public function show($id)
+ {
+     $task = Task::find($id);
+     return view('tasks/show')->with('task', $task);
+ }
+
+ビュー
+
+ @extends('layouts.app')
+ 
+ @section('title', $task->name)
+ 
+ @section('content')
+ 
+         <div class="panel panel-default">
+             <div class="panel-heading">{{ $task->name }}</div>
+             <div class="panel-body">
+                 <div>
+                     タスク名：{{ $task->name }}
+                 </div>
+                 <div>
+                     ステータス：{{ $task->done ? '完了' : '未' }}
+                 </div>
+             </div>
+             <div class="panel-footer">
+                 {{ link_to_route('tasks.index', '戻る') }}
+             </div>
+         </div>
+ 
+ @endsection
+
+
+■更新、削除画面
+
+コントローラ
+
+ public function edit($id)
+ {
+     $task = Task::find($id);
+     return view('tasks/edit')->with('task', $task);
+ }
+
+ public function update(Request $request, $id)
+ {
+     $task = Task::find($id);
+     $task->fill($request->all());
+     $task->save();
+     return redirect()->route('tasks.index');
+ }
+
+ public function destroy($id)
+ {
+     $task = Task::find($id);
+     $task->destroy();
+     return redirect()->route('tasks.index');
+ }
+
+ビュー
+
+ @extends('layouts.app')
+ 
+ @section('title', "$task->nameの編集")
+ 
+ @section('content')
+ 
+         <div class="panel panel-default">
+             <div class="panel-heading">{{ $task->name }}の編集</div>
+             <div class="panel-body">
+                 {!! Form::model($task, ['route' => ['tasks.update', $task->id], 'method' => 'patch', 'class' => 'form-horizontal']) !!}
+                     <div class="form-group">
+                         {!! Form::label('name', 'タスク名', ['class' => 'col-sm-3 control-label']) !!}
+                         <div class="col-sm-6">
+                             {!! Form::text('name', $task->name, ['id' => 'task-name', 'class' => 'form-control']) !!}
+                         </div>
+                     </div>
+                     <div class="form-group">
+                         {!! Form::label('done', 'ステータス', ['class' => 'col-sm-3 control-label']) !!}
+                         <div class="col-sm-6">
+                             {!! Form::select('done', [false => '未', true => '完了'], $task->done, ['id' => 'task-done', 'class' => 'form-control']) !!}
+                         </div>
+                     </div>
+                     <div class="form-group">
+                         <div class="col-sm-offset-3 col-sm-6">
+                             {!! Form::button('<i class="fa fa-save"></i>保存', ['type' => 'submit', 'class' => 'btn btn-default']) !!}
+                         </div>
+                     </div>
+                 {!! Form::close() !!}
+             </div>
+             <div class="panel-footer">
+                 {{ link_to_route('tasks.index', '戻る') }}
+             </div>
+         </div>
+ 
+ @endsection
